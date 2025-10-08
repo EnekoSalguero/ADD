@@ -1,0 +1,61 @@
+# cambiousuarios.ps1
+# Este script cambia el departamento de usuarios en AD según un CSV
+# y genera un log de errores y otro con los resultados.
+
+# Pedir datos al usuario
+$ruta = Read-Host "Introduce la ruta donde están los archivos (ej: C:\usuarios\yeray\Documentos)"
+$fichero = Read-Host "Introduce el nombre del fichero CSV (ej: Cambio_de_departamento.csv)"
+
+# Definir rutas completas
+$inFile = Join-Path $ruta $fichero
+$erroresFile = Join-Path $ruta "Errores.csv"
+$resultFile = Join-Path $ruta "Resultado.csv"
+
+# Comprobar que el archivo existe
+if (-not (Test-Path $inFile)) {
+    Write-Host "ERROR: No existe el fichero: $inFile"
+    exit 1
+}
+
+# Crear archivos de salida
+"Fecha,sAMAccountName,Error" | Out-File -FilePath $erroresFile -Encoding UTF8
+@() | Export-Csv -Path $resultFile -NoTypeInformation -Force
+
+# Leer el CSV de entrada
+$rows = Import-Csv -Path $inFile
+
+foreach ($r in $rows) {
+    $sam = $r.sAMAccountName
+
+    if ([string]::IsNullOrWhiteSpace($sam)) {
+        $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'),,sAMAccountName vacío"
+        $line | Out-File -FilePath $erroresFile -Append -Encoding UTF8
+        continue
+    }
+
+    # Buscar usuario en Active Directory
+    $user = Get-ADUser -Identity $sam -ErrorAction SilentlyContinue
+
+    if (-not $user) {
+        $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'),$sam,Usuario erróneo o no existe"
+        $line | Out-File -FilePath $erroresFile -Append -Encoding UTF8
+        Write-Host "No encontrado: $sam"
+        continue
+    }
+
+    # Si existe, cambiar departamento
+    try {
+        Set-ADUser -Identity $sam -Department $r.department -ErrorAction Stop
+        Write-Host "Modificado: $sam -> department='$($r.department)'"
+        $r | Select-Object * | Export-Csv -Path $resultFile -NoTypeInformation -Append
+    }
+    catch {
+        $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'),$sam,Error al modificar: $($_.Exception.Message)"
+        $line | Out-File -FilePath $erroresFile -Append -Encoding UTF8
+        Write-Host "Error modificando $sam: $($_.Exception.Message)"
+    }
+}
+
+Write-Host "Proceso completado."
+Write-Host "Resultado: $resultFile"
+Write-Host "Errores:  $erroresFile"

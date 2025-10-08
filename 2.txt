@@ -1,0 +1,71 @@
+# agenda.ps1
+$path = "agenda.json"
+
+function Load-Agenda {
+    if (Test-Path $path) {
+        try { return (Get-Content $path -Raw | ConvertFrom-Json) }
+        catch { return @{} }
+    } else { return @{} }
+}
+
+function Save-Agenda($a) {
+    $a | ConvertTo-Json | Out-File -FilePath $path -Encoding UTF8
+}
+
+$agenda = Load-Agenda
+
+while ($true) {
+    Write-Host ""
+    Write-Host "1) Añadir/Modificar  2) Buscar  3) Borrar  4) Listar  5) Salir"
+    $op = Read-Host "Elige opción (1-5)"
+
+    switch ($op) {
+        "1" {
+            $nombre = Read-Host "Nombre"
+            if ([string]::IsNullOrWhiteSpace($nombre)) { Write-Host "Nombre vacío"; continue }
+            $clave = $nombre.Trim()
+            if ($agenda.ContainsKey($clave)) {
+                Write-Host "Existe: $clave -> $($agenda[$clave])"
+                $mod = Read-Host "Modificar teléfono? (s/n)"
+                if ($mod -match '^[sS]') {
+                    $tel = Read-Host "Nuevo teléfono"
+                    $agenda[$clave] = $tel
+                    Write-Host "Modificado."
+                } else { Write-Host "No modificado." }
+            } else {
+                $tel = Read-Host "Teléfono"
+                $agenda[$clave] = $tel
+                Write-Host "Añadido."
+            }
+            Save-Agenda $agenda
+        }
+        "2" {
+            $pref = Read-Host "Cadena a buscar (prefijo)"
+            $pref = $pref.Trim()
+            $res = $agenda.GetEnumerator() | Where-Object { $_.Key.ToLower().StartsWith($pref.ToLower()) } | Sort-Object Key
+            if ($res.Count -eq 0) { Write-Host "No hay coincidencias." }
+            else { $res | ForEach-Object { Write-Host "$($_.Key) -> $($_.Value)" } }
+        }
+        "3" {
+            $nombre = Read-Host "Nombre a borrar"
+            $clave = $nombre.Trim()
+            if ($agenda.ContainsKey($clave)) {
+                Write-Host "Encontrado: $clave -> $($agenda[$clave])"
+                $q = Read-Host "Borrar? (s/n)"
+                if ($q -match '^[sS]') {
+                    $agenda.Remove($clave) > $null
+                    Save-Agenda $agenda
+                    Write-Host "Borrado."
+                } else { Write-Host "No borrado." }
+            } else { Write-Host "No existe ese nombre." }
+        }
+        "4" {
+            if ($agenda.Count -eq 0) { Write-Host "Agenda vacía." }
+            else {
+                $agenda.GetEnumerator() | Sort-Object Key | ForEach-Object { Write-Host "$($_.Key) -> $($_.Value)" }
+            }
+        }
+        "5" { break }
+        default { Write-Host "Opción no válida" }
+    }
+}

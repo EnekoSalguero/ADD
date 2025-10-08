@@ -1,0 +1,48 @@
+# automatizarps.ps1
+$dir = "C:\usuarios"
+
+if (-not (Test-Path $dir)) {
+    Write-Host "Directorio no existe: $dir"
+    exit
+}
+
+$files = Get-ChildItem -Path $dir -File
+
+if ($files.Count -eq 0) {
+    Write-Host "Listado vacío"
+    exit
+}
+
+# contraseña por defecto (modificar si se necesita)
+$plainPass = "P@ssw0rd123"
+$securePass = ConvertTo-SecureString $plainPass -AsPlainText -Force
+
+foreach ($file in $files) {
+    $username = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
+
+    # crear usuario si no existe
+    if (-not (Get-LocalUser -Name $username -ErrorAction SilentlyContinue)) {
+        New-LocalUser -Name $username -Password $securePass -FullName $username -Description "Usuario creado desde script"
+        Add-LocalGroupMember -Group "Users" -Member $username
+        Write-Host "Usuario creado: $username"
+    } else {
+        Write-Host "Usuario ya existe: $username"
+    }
+
+    # crear directorio de perfil (si no existe) y las carpetas listadas en el archivo
+    $userDir = Join-Path "C:\Users" $username
+    if (-not (Test-Path $userDir)) { New-Item -Path $userDir -ItemType Directory | Out-Null }
+
+    $lineas = Get-Content -Path $file.FullName
+    foreach ($line in $lineas) {
+        if (-not [string]::IsNullOrWhiteSpace($line)) {
+            $target = Join-Path $userDir $line.Trim()
+            New-Item -Path $target -ItemType Directory -Force | Out-Null
+            Write-Host "  Carpeta creada: $target"
+        }
+    }
+
+    # borrar el archivo original
+    Remove-Item -Path $file.FullName -Force
+    Write-Host "Archivo procesado y borrado: $($file.Name)"
+}

@@ -1,0 +1,123 @@
+# barrido.ps1
+Param()
+
+function IPToInt($ip) {
+    $bytes = $ip.Split('.') | ForEach-Object {[int]$_}
+    return ($bytes[0] -shl 24) -bor ($bytes[1] -shl 16) -bor ($bytes[2] -shl 8) -bor $bytes[3]
+}
+function IntToIP($int) {
+    $b1 = ($int -shr 24) -band 255
+    $b2 = ($int -shr 16) -band 255
+    $b3 = ($int -shr 8)  -band 255
+    $b4 = $int -band 255
+    return "$b1.$b2.$b3.$b4"
+}
+function MaskToPrefix($mask) {
+    $bits = ($mask.Split('.') | ForEach-Object { [convert]::ToString([int]$_,2).PadLeft(8,'0') }) -join ''
+    return ($bits.ToCharArray() | Where-Object { $_ -eq '1' }).Count
+}
+function CIDRtoRange($cidr) {
+    $parts = $cidr.Split('/')
+    $ip = $parts[0]
+    $prefix = [int]$parts[1]
+    $maskInt = ([uint32]0xFFFFFFFF -shl (32 - $prefix)) -band 0xFFFFFFFF
+    $ipInt = [uint32](IPToInt $ip)
+    $network = $ipInt -band $maskInt
+    $broadcast = $network + ([uint32]((2 ** (32 - $prefix)) - 1))
+    return @{start = [int]$network; end = [int]$broadcast}
+}
+
+# --- Pedir datos al usuario ---
+$inputRange = Read-Host "Red (CIDR, start-end o base/mask). Ej: 192.168.1.0/24  o  192.168.1.10-192.168.1.200  o  192.168.1.0/255.255.255.0"
+$timeout = Read-Host "Timeout por ping en segundos (por defecto 1)"; if (-not $timeout) { $timeout = 1 } else { $timeout = [int]$timeout }
+$maxParallel = Read-Host "Máx tareas paralelas (por defecto 50)"; if (-not $maxParallel) { $maxParallel = 50 } else { $maxParallel = [int]$maxParallel }
+$outPath = Read-Host "Archivo salida (txt o csv). Ej: resultados.txt (por defecto resultados.txt)"; if (-not $outPath) { $outPath = "resultados.txt" }
+
+# --- Validar y generar lista de IPs ---
+$startInt = $null; $endInt = $null
+if ($inputRange -match '/') {
+    # Puede ser CIDR con prefijo numérico o máscara decimal
+    if ($inputRange -match '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$') {
+        $r = CIDRtoRange $inputRange
+        $startInt = $r.start; $endInt = $r.end
+    } elseif ($inputRange -match '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$') {
+        $parts = $inputRange.Split('/')
+        $prefix = MaskToPrefix $parts[1]
+        $cidr = "$($parts[0])/$prefix"
+        $r = CIDRtoRange $cidr
+        $startInt = $r.start; $endInt = $r.end
+    } else {
+        Write-Host "Formato con / no válido"; exit
+    }
+}
+elseif ($inputRange -match '-') {
+    $p = $inputRange.Split('-')
+    try {
+        $startInt = IPToInt $p[0]; $endInt = IPToInt $p[1]
+    } catch { Write-Host "Rango no válido"; exit }
+} else {
+    Write-Host "Formato de red no reconocido"; exit
+}
+
+if ($startInt -gt $endInt) { $tmp = $startInt; $startInt = $endInt; $endInt = $tmp }
+
+$total = $endInt - $startInt + 1
+if ($total -gt 65536) { Write-Host "Demasiadas IPs ($total). Cancela y usa un rango más pequeño."; exit }
+
+$ips = for ($i = $startInt; $i -le $endInt; $i++) { IntToIP $i }
+
+# --- Barrido con control de jobs ---
+$active = [System.Collections.Generic.List[string]]::new()
+$jobs = @()
+$count = 0
+
+foreach ($ip in $ips) {
+    # Controlar máximos
+    while ((Get-Job -State Running).Count -ge $maxParallel) {
+        Start-Sleep -Milliseconds 200
+        # actualizar progreso
+        $done = (Get-Job -State Completed).Count
+        $pct = [int](($done / $total) * 100)
+        Write-Progress -Activity "Haciendo ping" -Status "$done de $total" -PercentComplete $pct
+    }
+
+    $j = Start-Job -ArgumentList $ip,$timeout -ScriptBlock {
+        param($ipInner,$t)
+        try {
+            if (Test-Connection -ComputerName $ipInner -Count 1 -Quiet -TimeoutSeconds $t) {
+                Write-Output $ipInner
+            }
+        } catch { }
+    }
+    $jobs += $j
+    $count++
+    # actualizar progreso rápido
+    $done = (Get-Job -State Completed).Count
+    $pct = [int](($done / $total) * 100)
+    Write-Progress -Activity "Haciendo ping" -Status "$done de $total" -PercentComplete $pct
+}
+
+# Esperar a que terminen todos
+while ((Get-Job -State Running).Count -gt 0) {
+    Start-Sleep -Milliseconds 500
+    $done = (Get-Job -State Completed).Count
+    $pct = [int](($done / $total) * 100)
+    Write-Progress -Activity "Haciendo ping" -Status "$done de $total" -PercentComplete $pct
+}
+
+# Recoger resultados y limpiar jobs
+$responders = @()
+foreach ($j in $jobs) {
+    $res = Receive-Job -Job $j -ErrorAction SilentlyContinue
+    if ($res) { $responders += $res }
+    Remove-Job -Job $j -Force -ErrorAction SilentlyContinue
+}
+
+# Guardar salida
+if ($outPath.ToLower().EndsWith(".csv")) {
+    $responders | Sort-Object | ForEach-Object { [PSCustomObject]@{IP = $_} } | Export-Csv -Path $outPath -NoTypeInformation
+} else {
+    $responders | Sort-Object | Out-File -FilePath $outPath -Encoding utf8
+}
+
+Write-Host "Hecho. Activas: $($responders.Count). Guardado en $outPath"
