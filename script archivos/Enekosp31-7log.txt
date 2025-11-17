@@ -1,0 +1,31 @@
+#!/bin/bash
+# Script: nombresp31-7log
+# Recorrer /var/log y buscar líneas con "error" o "fail"
+
+DIRECTORIO="/var/log"
+SALIDA="errores_filtrados.txt"
+
+# Crear (o vaciar) el archivo de salida
+echo "=== RESULTADOS DE ERRORES EN /var/log ===" > $SALIDA
+
+# Recorrer todos los archivos del directorio
+for archivo in $DIRECTORIO/*; do
+
+    # Verificar que sea un archivo normal
+    if [ -f "$archivo" ]; then
+
+        # Buscar líneas con error o fail (sin distinguir mayúsculas)
+        RESULTADOS=$(grep -i -E "error|fail" "$archivo")
+
+        # Si hay resultados, guardarlos en el archivo
+        if [ ! -z "$RESULTADOS" ]; then
+            echo "====================================" >> $SALIDA
+            echo "Errores encontrados en: $archivo" >> $SALIDA
+            echo "------------------------------------" >> $SALIDA
+            echo "$RESULTADOS" >> $SALIDA
+            echo "" >> $SALIDA
+        fi
+    fi
+done
+
+echo "Proceso completado. Archivo generado: $SALIDA"

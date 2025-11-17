@@ -1,0 +1,21 @@
+#!/bin/bash
+# Script para eliminar programas listados en programas.txt
+
+ARCHIVO="programas.txt"
+
+# Comprobar si el archivo existe
+if [ ! -f "$ARCHIVO" ]; then
+    echo "El archivo programas.txt no existe en este directorio."
+    exit 1
+fi
+
+# Leer archivo línea por línea
+while IFS= read -r programa; do
+    # Evitar líneas vacías
+    if [ ! -z "$programa" ]; then
+        echo "Eliminando programa: $programa"
+        sudo apt remove -y "$programa"
+    fi
+done < "$ARCHIVO"
+
+echo "Proceso terminado."
